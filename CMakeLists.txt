@@ -10,8 +10,9 @@ set(ORTHANC_VERSION "mainline")
 #   * Orthanc 0.3.1                  = version 2
 #   * Orthanc 0.4.0 -> Orthanc 0.7.2 = version 3
 #   * Orthanc 0.7.3 -> Orthanc 0.8.4 = version 4
-#   * Orthanc 0.8.5 -> mainline      = version 5
-set(ORTHANC_DATABASE_VERSION 5)
+#   * Orthanc 0.8.5 -> Orthanc 0.9.4 = version 5
+#   * Orthanc 0.9.5 -> mainline      = version 6
+set(ORTHANC_DATABASE_VERSION 6)
 
 
 #####################################################################
@@ -171,6 +172,7 @@ set(ORTHANC_SERVER_SOURCES
   OrthancServer/ServerIndex.cpp
   OrthancServer/ToDcmtkBridge.cpp
   OrthancServer/DatabaseWrapper.cpp
+  OrthancServer/DatabaseWrapperBase.cpp
   OrthancServer/ServerContext.cpp
   OrthancServer/ServerEnumerations.cpp
   OrthancServer/ServerToolbox.cpp
