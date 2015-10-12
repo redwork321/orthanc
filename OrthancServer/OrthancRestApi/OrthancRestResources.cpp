@@ -208,7 +208,7 @@ namespace Orthanc
       context.ReadJson(full, publicId);
 
       Json::Value simplified;
-      SimplifyTags(simplified, full);
+      Toolbox::SimplifyTags(simplified, full);
       call.GetOutput().AnswerJson(simplified);
     }
     else
@@ -792,7 +792,7 @@ namespace Orthanc
       if (simplify)
       {
         Json::Value simplified;
-        SimplifyTags(simplified, sharedTags);
+        Toolbox::SimplifyTags(simplified, sharedTags);
         call.GetOutput().AnswerJson(simplified);
       }
       else
@@ -859,7 +859,7 @@ namespace Orthanc
     if (simplify)
     {
       Json::Value simplified;
-      SimplifyTags(simplified, result);
+      Toolbox::SimplifyTags(simplified, result);
       call.GetOutput().AnswerJson(simplified);
     }
     else
@@ -1030,7 +1030,7 @@ namespace Orthanc
       if (simplify)
       {
         Json::Value simplified;
-        SimplifyTags(simplified, full);
+        Toolbox::SimplifyTags(simplified, full);
         result[*it] = simplified;
       }
       else

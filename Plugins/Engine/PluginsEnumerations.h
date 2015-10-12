@@ -37,13 +37,17 @@
 #include "../Include/orthanc/OrthancCPlugin.h"
 #include "../../OrthancServer/ServerEnumerations.h"
 
+#if !defined(ORTHANC_ENABLE_DCMTK) || ORTHANC_ENABLE_DCMTK != 0
 #include <dcmtk/dcmdata/dcvr.h>
+#endif
 
 namespace Orthanc
 {
   namespace Plugins
   {
     OrthancPluginResourceType Convert(ResourceType type);
+
+    ResourceType Convert(OrthancPluginResourceType type);
 
     OrthancPluginChangeType Convert(ChangeType type);
 
@@ -55,7 +59,9 @@ namespace Orthanc
 
     FileContentType Convert(OrthancPluginContentType type);
 
+#if !defined(ORTHANC_ENABLE_DCMTK) || ORTHANC_ENABLE_DCMTK != 0
     DcmEVR Convert(OrthancPluginValueRepresentation vr);
+#endif
   }
 }
 
