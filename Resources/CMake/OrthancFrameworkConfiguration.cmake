@@ -423,13 +423,12 @@ if (ENABLE_DCMTK)
       ${ORTHANC_ROOT}/Core/DicomNetworking/DicomFindAnswers.cpp
       ${ORTHANC_ROOT}/Core/DicomNetworking/DicomServer.cpp
       ${ORTHANC_ROOT}/Core/DicomNetworking/DicomUserConnection.cpp
-      ${ORTHANC_ROOT}/Core/DicomNetworking/RemoteModalityParameters.cpp
-      ${ORTHANC_ROOT}/Core/DicomNetworking/ReusableDicomUserConnection.cpp
-
       ${ORTHANC_ROOT}/Core/DicomNetworking/Internals/CommandDispatcher.cpp
       ${ORTHANC_ROOT}/Core/DicomNetworking/Internals/FindScp.cpp
       ${ORTHANC_ROOT}/Core/DicomNetworking/Internals/MoveScp.cpp
       ${ORTHANC_ROOT}/Core/DicomNetworking/Internals/StoreScp.cpp
+      ${ORTHANC_ROOT}/Core/DicomNetworking/RemoteModalityParameters.cpp
+      ${ORTHANC_ROOT}/Core/DicomNetworking/TimeoutDicomConnectionManager.cpp
       )
   else()
     add_definitions(-DORTHANC_ENABLE_DCMTK_NETWORKING=0)
@@ -498,11 +497,16 @@ else()
   list(APPEND ORTHANC_CORE_SOURCES_INTERNAL
     ${ORTHANC_ROOT}/Core/Cache/SharedArchive.cpp
     ${ORTHANC_ROOT}/Core/FileStorage/FilesystemStorage.cpp
-    ${ORTHANC_ROOT}/Core/MultiThreading/BagOfTasksProcessor.cpp
-    ${ORTHANC_ROOT}/Core/MultiThreading/Mutex.cpp
-    ${ORTHANC_ROOT}/Core/MultiThreading/ReaderWriterLock.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/JobInfo.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/JobStatus.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/JobStepResult.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/JobsEngine.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/JobsRegistry.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/Operations/JobOperationValues.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/Operations/LogJobOperation.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/Operations/SequenceOfOperationsJob.cpp
+    ${ORTHANC_ROOT}/Core/JobsEngine/SetOfInstancesJob.cpp
     ${ORTHANC_ROOT}/Core/MultiThreading/RunnableWorkersPool.cpp
-    ${ORTHANC_ROOT}/Core/MultiThreading/Semaphore.cpp
     ${ORTHANC_ROOT}/Core/MultiThreading/SharedMessageQueue.cpp
     ${ORTHANC_ROOT}/Core/SharedLibrary.cpp
     ${ORTHANC_ROOT}/Core/SystemToolbox.cpp

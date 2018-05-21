@@ -34,15 +34,14 @@
 #include "../PrecompiledHeadersServer.h"
 #include "OrthancRestApi.h"
 
-#include "../OrthancInitialization.h"
-#include "../../Core/HttpClient.h"
-#include "../../Core/Logging.h"
 #include "../../Core/DicomParsing/FromDcmtkBridge.h"
-#include "../Scheduler/ServerJob.h"
-#include "../Scheduler/StoreScuCommand.h"
-#include "../Scheduler/StorePeerCommand.h"
+#include "../../Core/Logging.h"
+#include "../OrthancInitialization.h"
 #include "../QueryRetrieveHandler.h"
+#include "../ServerJobs/DicomModalityStoreJob.h"
+#include "../ServerJobs/OrthancPeerStoreJob.h"
 #include "../ServerToolbox.h"
+
 
 namespace Orthanc
 {
@@ -55,12 +54,15 @@ namespace Orthanc
     ServerContext& context = OrthancRestApi::GetContext(call);
 
     const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-    RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-    ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
+    RemoteModalityParameters remote =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
 
     try
     {
-      if (locker.GetConnection().Echo())
+      DicomUserConnection connection(localAet, remote);
+      connection.Open();
+      
+      if (connection.Echo())
       {
         // Echo has succeeded
         call.GetOutput().AnswerBuffer("{}", "application/json");
@@ -176,11 +178,16 @@ namespace Orthanc
     }
 
     const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-    RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-    ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
-
+    RemoteModalityParameters remote =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
+    
     DicomFindAnswers answers(false);
-    FindPatient(answers, locker.GetConnection(), fields);
+
+    {
+      DicomUserConnection connection(localAet, remote);
+      connection.Open();
+      FindPatient(answers, connection, fields);
+    }
 
     Json::Value result;
     answers.ToJson(result, true);
@@ -206,11 +213,16 @@ namespace Orthanc
     }        
       
     const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-    RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-    ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
+    RemoteModalityParameters remote =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
 
     DicomFindAnswers answers(false);
-    FindStudy(answers, locker.GetConnection(), fields);
+
+    {
+      DicomUserConnection connection(localAet, remote);
+      connection.Open();
+      FindStudy(answers, connection, fields);
+    }
 
     Json::Value result;
     answers.ToJson(result, true);
@@ -237,11 +249,16 @@ namespace Orthanc
     }        
          
     const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-    RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-    ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
+    RemoteModalityParameters remote =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
 
     DicomFindAnswers answers(false);
-    FindSeries(answers, locker.GetConnection(), fields);
+
+    {
+      DicomUserConnection connection(localAet, remote);
+      connection.Open();
+      FindSeries(answers, connection, fields);
+    }
 
     Json::Value result;
     answers.ToJson(result, true);
@@ -269,11 +286,16 @@ namespace Orthanc
     }        
          
     const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-    RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-    ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
+    RemoteModalityParameters remote =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
 
     DicomFindAnswers answers(false);
-    FindInstance(answers, locker.GetConnection(), fields);
+
+    {
+      DicomUserConnection connection(localAet, remote);
+      connection.Open();
+      FindInstance(answers, connection, fields);
+    }
 
     Json::Value result;
     answers.ToJson(result, true);
@@ -306,11 +328,14 @@ namespace Orthanc
     }
  
     const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-    RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-    ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
+    RemoteModalityParameters remote =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
 
+    DicomUserConnection connection(localAet, remote);
+    connection.Open();
+    
     DicomFindAnswers patients(false);
-    FindPatient(patients, locker.GetConnection(), m);
+    FindPatient(patients, connection, m);
 
     // Loop over the found patients
     Json::Value result = Json::arrayValue;
@@ -328,7 +353,7 @@ namespace Orthanc
       CopyTagIfExists(m, patients.GetAnswer(i), DICOM_TAG_PATIENT_ID);
 
       DicomFindAnswers studies(false);
-      FindStudy(studies, locker.GetConnection(), m);
+      FindStudy(studies, connection, m);
 
       patient["Studies"] = Json::arrayValue;
       
@@ -348,7 +373,7 @@ namespace Orthanc
         CopyTagIfExists(m, studies.GetAnswer(j), DICOM_TAG_STUDY_INSTANCE_UID);
 
         DicomFindAnswers series(false);
-        FindSeries(series, locker.GetConnection(), m);
+        FindSeries(series, connection, m);
 
         // Loop over the found series
         study["Series"] = Json::arrayValue;
@@ -671,6 +696,55 @@ namespace Orthanc
   }
 
 
+  static void SubmitJob(RestApiPostCall& call,
+                        const Json::Value& request,
+                        const std::list<std::string>& instances,
+                        SetOfInstancesJob* jobRaw)
+  {
+    std::auto_ptr<SetOfInstancesJob> job(jobRaw);
+    
+    if (job.get() == NULL)
+    {
+      throw OrthancException(ErrorCode_NullPointer);
+    }
+    
+    ServerContext& context = OrthancRestApi::GetContext(call);
+
+    bool permissive = Toolbox::GetJsonBooleanField(request, "Permissive", false);
+    bool asynchronous = Toolbox::GetJsonBooleanField(request, "Asynchronous", false);
+    int priority = Toolbox::GetJsonIntegerField(request, "Priority", 0);
+
+    job->SetPermissive(permissive);
+    job->Reserve(instances.size());
+
+    for (std::list<std::string>::const_iterator 
+           it = instances.begin(); it != instances.end(); ++it)
+    {
+      job->AddInstance(*it);
+    }
+    
+    if (asynchronous)
+    {
+      // Asynchronous mode: Submit the job, but don't wait for its completion
+      std::string id;
+      context.GetJobsEngine().GetRegistry().Submit(id, job.release(), priority);
+
+      Json::Value v;
+      v["ID"] = id;
+      call.GetOutput().AnswerJson(v);
+    }
+    else if (context.GetJobsEngine().GetRegistry().SubmitAndWait(job.release(), priority))
+    {
+      // Synchronous mode: We have submitted and waited for completion
+      call.GetOutput().AnswerBuffer("{}", "application/json");
+    }
+    else
+    {
+      call.GetOutput().SignalError(HttpStatus_500_InternalServerError);
+    }
+  }
+
+
   static void DicomStore(RestApiPostCall& call)
   {
     ServerContext& context = OrthancRestApi::GetContext(call);
@@ -684,51 +758,25 @@ namespace Orthanc
       return;
     }
 
-    std::string localAet = Toolbox::GetJsonStringField(request, "LocalAet", context.GetDefaultLocalApplicationEntityTitle());
-    bool permissive = Toolbox::GetJsonBooleanField(request, "Permissive", false);
-    bool asynchronous = Toolbox::GetJsonBooleanField(request, "Asynchronous", false);
-    std::string moveOriginatorAET = Toolbox::GetJsonStringField(request, "MoveOriginatorAet", context.GetDefaultLocalApplicationEntityTitle());
-    int moveOriginatorID = Toolbox::GetJsonIntegerField(request, "MoveOriginatorID", 0 /* By default, not a C-MOVE */);
+    std::string localAet = Toolbox::GetJsonStringField
+      (request, "LocalAet", context.GetDefaultLocalApplicationEntityTitle());
+    std::string moveOriginatorAET = Toolbox::GetJsonStringField
+      (request, "MoveOriginatorAet", context.GetDefaultLocalApplicationEntityTitle());
+    int moveOriginatorID = Toolbox::GetJsonIntegerField
+      (request, "MoveOriginatorID", 0 /* By default, not a C-MOVE */);
 
-    if (moveOriginatorID < 0 || 
-        moveOriginatorID >= 65536)
-    {
-      throw OrthancException(ErrorCode_ParameterOutOfRange);
-    }
-    
     RemoteModalityParameters p = Configuration::GetModalityUsingSymbolicName(remote);
 
-    ServerJob job;
-    for (std::list<std::string>::const_iterator 
-           it = instances.begin(); it != instances.end(); ++it)
+    std::auto_ptr<DicomModalityStoreJob> job(new DicomModalityStoreJob(context));
+    job->SetLocalAet(localAet);
+    job->SetRemoteModality(p);
+
+    if (moveOriginatorID != 0)
     {
-      std::auto_ptr<StoreScuCommand> command(new StoreScuCommand(context, localAet, p, permissive));
-
-      if (moveOriginatorID != 0)
-      {
-        command->SetMoveOriginator(moveOriginatorAET, static_cast<uint16_t>(moveOriginatorID));
-      }
-
-      job.AddCommand(command.release()).AddInput(*it);
+      job->SetMoveOriginator(moveOriginatorAET, moveOriginatorID);
     }
 
-    job.SetDescription("HTTP request: Store-SCU to peer \"" + remote + "\"");
-
-    if (asynchronous)
-    {
-      // Asynchronous mode: Submit the job, but don't wait for its completion
-      context.GetScheduler().Submit(job);
-      call.GetOutput().AnswerBuffer("{}", "application/json");
-    }
-    else if (context.GetScheduler().SubmitAndWait(job))
-    {
-      // Synchronous mode: We have submitted and waited for completion
-      call.GetOutput().AnswerBuffer("{}", "application/json");
-    }
-    else
-    {
-      call.GetOutput().SignalError(HttpStatus_500_InternalServerError);
-    }
+    SubmitJob(call, request, instances, job.release());
   }
 
 
@@ -757,18 +805,23 @@ namespace Orthanc
 
     ResourceType level = StringToResourceType(request["Level"].asCString());
     
-    std::string localAet = Toolbox::GetJsonStringField(request, "LocalAet", context.GetDefaultLocalApplicationEntityTitle());
-    std::string targetAet = Toolbox::GetJsonStringField(request, "TargetAet", context.GetDefaultLocalApplicationEntityTitle());
+    std::string localAet = Toolbox::GetJsonStringField
+      (request, "LocalAet", context.GetDefaultLocalApplicationEntityTitle());
+    std::string targetAet = Toolbox::GetJsonStringField
+      (request, "TargetAet", context.GetDefaultLocalApplicationEntityTitle());
 
-    const RemoteModalityParameters source = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
-      
+    const RemoteModalityParameters source =
+      Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
+
+    DicomUserConnection connection(localAet, source);
+    connection.Open();
+    
     for (Json::Value::ArrayIndex i = 0; i < request[RESOURCES].size(); i++)
     {
       DicomMap resource;
       FromDcmtkBridge::FromJson(resource, request[RESOURCES][i]);
-
-      ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, source);
-      locker.GetConnection().Move(targetAet, level, resource);
+      
+      connection.Move(targetAet, level, resource);
     }
 
     // Move has succeeded
@@ -850,35 +903,13 @@ namespace Orthanc
       return;
     }
 
-    bool asynchronous = Toolbox::GetJsonBooleanField(request, "Asynchronous", false);
-
     WebServiceParameters peer;
     Configuration::GetOrthancPeer(peer, remote);
 
-    ServerJob job;
-    for (std::list<std::string>::const_iterator 
-           it = instances.begin(); it != instances.end(); ++it)
-    {
-      job.AddCommand(new StorePeerCommand(context, peer, false)).AddInput(*it);
-    }
+    std::auto_ptr<OrthancPeerStoreJob> job(new OrthancPeerStoreJob(context));
+    job->SetPeer(peer);    
 
-    job.SetDescription("HTTP request: POST to peer \"" + remote + "\"");
-
-    if (asynchronous)
-    {
-      // Asynchronous mode: Submit the job, but don't wait for its completion
-      context.GetScheduler().Submit(job);
-      call.GetOutput().AnswerBuffer("{}", "application/json");
-    }
-    else if (context.GetScheduler().SubmitAndWait(job))
-    {
-      // Synchronous mode: We have submitted and waited for completion
-      call.GetOutput().AnswerBuffer("{}", "application/json");
-    }
-    else
-    {
-      call.GetOutput().SignalError(HttpStatus_500_InternalServerError);
-    }
+    SubmitJob(call, request, instances, job.release());
   }
 
 
@@ -984,15 +1015,17 @@ namespace Orthanc
     if (call.ParseJsonRequest(json))
     {
       const std::string& localAet = context.GetDefaultLocalApplicationEntityTitle();
-      RemoteModalityParameters remote = Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
+      RemoteModalityParameters remote =
+        Configuration::GetModalityUsingSymbolicName(call.GetUriComponent("id", ""));
 
       std::auto_ptr<ParsedDicomFile> query(ParsedDicomFile::CreateFromJson(json, static_cast<DicomFromJsonFlags>(0)));
 
       DicomFindAnswers answers(true);
 
       {
-        ReusableDicomUserConnection::Locker locker(context.GetReusableDicomUserConnection(), localAet, remote);
-        locker.GetConnection().FindWorklist(answers, *query);
+        DicomUserConnection connection(localAet, remote);
+        connection.Open();
+        connection.FindWorklist(answers, *query);
       }
 
       Json::Value result;

@@ -42,7 +42,6 @@
 #include "../Core/Lua/LuaFunctionCall.h"
 #include "../Core/DicomFormat/DicomArray.h"
 #include "../Core/DicomNetworking/DicomServer.h"
-#include "../Core/DicomNetworking/ReusableDicomUserConnection.h"
 #include "OrthancInitialization.h"
 #include "ServerContext.h"
 #include "OrthancFindRequestHandler.h"
@@ -266,7 +265,7 @@ public:
     {
       std::string lua = "Is" + configuration;
 
-      LuaScripting::Locker locker(context_.GetLua());
+      LuaScripting::Locker locker(context_.GetLuaScripting());
       
       if (locker.GetLua().IsExistingFunction(lua.c_str()))
       {
@@ -291,7 +290,7 @@ public:
     {
       std::string lua = "Is" + std::string(configuration);
 
-      LuaScripting::Locker locker(context_.GetLua());
+      LuaScripting::Locker locker(context_.GetLuaScripting());
       
       if (locker.GetLua().IsExistingFunction(lua.c_str()))
       {
@@ -337,7 +336,7 @@ public:
 
     static const char* HTTP_FILTER = "IncomingHttpRequestFilter";
 
-    LuaScripting::Locker locker(context_.GetLua());
+    LuaScripting::Locker locker(context_.GetLuaScripting());
 
     // Test if the instance must be filtered out
     if (locker.GetLua().IsExistingFunction(HTTP_FILTER))
@@ -574,6 +573,7 @@ static void PrintErrors(const char* path)
     PrintErrorCode(ErrorCode_NotAcceptable, "Cannot send a response which is acceptable according to the Accept HTTP header");
     PrintErrorCode(ErrorCode_NullPointer, "Cannot handle a NULL pointer");
     PrintErrorCode(ErrorCode_DatabaseUnavailable, "The database is currently not available (probably a transient situation)");
+    PrintErrorCode(ErrorCode_CanceledJob, "This job was canceled");
     PrintErrorCode(ErrorCode_SQLiteNotOpened, "SQLite: The database is not opened");
     PrintErrorCode(ErrorCode_SQLiteAlreadyOpened, "SQLite: Connection is already open");
     PrintErrorCode(ErrorCode_SQLiteCannotOpen, "SQLite: Unable to open the database");
@@ -652,7 +652,7 @@ static void LoadLuaScripts(ServerContext& context)
     std::string script;
     SystemToolbox::ReadFile(script, path);
 
-    LuaScripting::Locker locker(context.GetLua());
+    LuaScripting::Locker locker(context.GetLuaScripting());
     locker.GetLua().Execute(script);
   }
 }
@@ -689,7 +689,7 @@ static bool WaitForExit(ServerContext& context,
   }
 #endif
 
-  context.GetLua().Execute("Initialize");
+  context.GetLuaScripting().Execute("Initialize");
 
   bool restart;
 
@@ -723,7 +723,7 @@ static bool WaitForExit(ServerContext& context,
     }
   }
 
-  context.GetLua().Execute("Finalize");
+  context.GetLuaScripting().Execute("Finalize");
 
 #if ORTHANC_ENABLE_PLUGINS == 1
   if (context.HasPlugins())

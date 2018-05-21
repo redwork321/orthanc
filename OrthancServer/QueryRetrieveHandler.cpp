@@ -46,7 +46,7 @@ namespace Orthanc
   {
     static const char* LUA_CALLBACK = "OutgoingFindRequestFilter";
 
-    LuaScripting::Locker locker(context.GetLua());
+    LuaScripting::Locker locker(context.GetLuaScripting());
     if (locker.GetLua().IsExistingFunction(LUA_CALLBACK))
     {
       LuaFunctionCall call(locker.GetLua(), LUA_CALLBACK);
@@ -76,6 +76,19 @@ namespace Orthanc
   {
     done_ = false;
     answers_.Clear();
+    connection_.reset(NULL);
+  }
+
+
+  DicomUserConnection& QueryRetrieveHandler::GetConnection()
+  {
+    if (connection_.get() == NULL)
+    {
+      connection_.reset(new DicomUserConnection(localAet_, modality_));
+      connection_->Open();
+    }
+
+    return *connection_;
   }
 
 
@@ -91,11 +104,7 @@ namespace Orthanc
       // Secondly, possibly fix the query with the user-provider Lua callback
       FixQuery(fixed, context_, modality_.GetApplicationEntityTitle()); 
 
-      {
-        // Finally, run the C-FIND SCU against the fixed query
-        ReusableDicomUserConnection::Locker locker(context_.GetReusableDicomUserConnection(), localAet_, modality_);
-        locker.GetConnection().Find(answers_, level_, fixed);
-      }
+      GetConnection().Find(answers_, level_, fixed);
 
       done_ = true;
     }
@@ -155,11 +164,7 @@ namespace Orthanc
   {
     DicomMap map;
     GetAnswer(map, i);
-
-    {
-      ReusableDicomUserConnection::Locker locker(context_.GetReusableDicomUserConnection(), localAet_, modality_);
-      locker.GetConnection().Move(target, map);
-    }
+    GetConnection().Move(target, map);
   }
 
 
