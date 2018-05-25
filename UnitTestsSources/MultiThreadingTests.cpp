@@ -34,13 +34,11 @@
 #include "PrecompiledHeadersUnitTests.h"
 #include "gtest/gtest.h"
 
-#include "../OrthancServer/Scheduler/ServerScheduler.h"
+#include "../Core/JobsEngine/JobsEngine.h"
+#include "../Core/MultiThreading/SharedMessageQueue.h"
 #include "../Core/OrthancException.h"
 #include "../Core/SystemToolbox.h"
 #include "../Core/Toolbox.h"
-#include "../Core/MultiThreading/Locker.h"
-#include "../Core/MultiThreading/Mutex.h"
-#include "../Core/MultiThreading/ReaderWriterLock.h"
 
 using namespace Orthanc;
 
@@ -106,156 +104,576 @@ TEST(MultiThreading, SharedMessageQueueClean)
 }
 
 
-TEST(MultiThreading, Mutex)
-{
-  Mutex mutex;
-  Locker locker(mutex);
-}
 
 
-TEST(MultiThreading, ReaderWriterLock)
-{
-  ReaderWriterLock lock;
-
-  {
-    Locker locker1(lock.ForReader());
-    Locker locker2(lock.ForReader());
-  }
-
-  {
-    Locker locker3(lock.ForWriter());
-  }
-}
-
-
-
-#include "../Core/DicomNetworking/ReusableDicomUserConnection.h"
-
-TEST(ReusableDicomUserConnection, DISABLED_Basic)
-{
-  ReusableDicomUserConnection c;
-  c.SetMillisecondsBeforeClose(200);
-  printf("START\n"); fflush(stdout);
-
-  {
-    RemoteModalityParameters remote("STORESCP", "localhost", 2000, ModalityManufacturer_Generic);
-    ReusableDicomUserConnection::Locker lock(c, "ORTHANC", remote);
-    lock.GetConnection().StoreFile("/home/jodogne/DICOM/Cardiac/MR.X.1.2.276.0.7230010.3.1.4.2831157719.2256.1336386844.676281");
-  }
-
-  printf("**\n"); fflush(stdout);
-  SystemToolbox::USleep(1000000);
-  printf("**\n"); fflush(stdout);
-
-  {
-    RemoteModalityParameters remote("STORESCP", "localhost", 2000, ModalityManufacturer_Generic);
-    ReusableDicomUserConnection::Locker lock(c, "ORTHANC", remote);
-    lock.GetConnection().StoreFile("/home/jodogne/DICOM/Cardiac/MR.X.1.2.276.0.7230010.3.1.4.2831157719.2256.1336386844.676277");
-  }
-
-  SystemToolbox::ServerBarrier();
-  printf("DONE\n"); fflush(stdout);
-}
-
-
-
-class Tutu : public IServerCommand
+class DummyJob : public Orthanc::IJob
 {
 private:
-  int factor_;
+  bool         fails_;
+  unsigned int count_;
+  unsigned int steps_;
 
 public:
-  Tutu(int f) : factor_(f)
+  DummyJob() :
+    fails_(false),
+    count_(0),
+    steps_(4)
   {
   }
 
-  virtual bool Apply(ListOfStrings& outputs,
-                     const ListOfStrings& inputs)
+  explicit DummyJob(bool fails) :
+  fails_(fails),
+    count_(0),
+    steps_(4)
   {
-    for (ListOfStrings::const_iterator 
-           it = inputs.begin(); it != inputs.end(); ++it)
+  }
+
+  virtual void Start()
+  {
+  }
+
+  virtual void SignalResubmit()
+  {
+  }
+    
+  virtual JobStepResult ExecuteStep()
+  {
+    if (fails_)
     {
-      int a = boost::lexical_cast<int>(*it);
-      int b = factor_ * a;
-
-      printf("%d * %d = %d\n", a, factor_, b);
-
-      //if (a == 84) { printf("BREAK\n"); return false; }
-
-      outputs.push_back(boost::lexical_cast<std::string>(b));
+      return JobStepResult::Failure(ErrorCode_ParameterOutOfRange);
     }
+    else if (count_ == steps_ - 1)
+    {
+      return JobStepResult::Success();
+    }
+    else
+    {
+      count_++;
+      return JobStepResult::Continue();
+    }
+  }
 
-    SystemToolbox::USleep(30000);
+  virtual void ReleaseResources()
+  {
+  }
 
-    return true;
+  virtual float GetProgress()
+  {
+    return static_cast<float>(count_) / static_cast<float>(steps_ - 1);
+  }
+
+  virtual void GetJobType(std::string& type)
+  {
+    type = "DummyJob";
+  }
+
+  virtual void GetInternalContent(Json::Value& value)
+  {
+  }
+
+  virtual void GetPublicContent(Json::Value& value)
+  {
+    value["hello"] = "world";
   }
 };
 
 
-static void Tata(ServerScheduler* s, ServerJob* j, bool* done)
+static bool CheckState(Orthanc::JobsRegistry& registry,
+                       const std::string& id,
+                       Orthanc::JobState state)
 {
-  typedef IServerCommand::ListOfStrings  ListOfStrings;
-
-  while (!(*done))
+  Orthanc::JobState s;
+  if (registry.GetState(s, id))
   {
-    ListOfStrings l;
-    s->GetListOfJobs(l);
-    for (ListOfStrings::iterator it = l.begin(); it != l.end(); ++it)
-    {
-      printf(">> %s: %0.1f\n", it->c_str(), 100.0f * s->GetProgress(*it));
-    }
-    SystemToolbox::USleep(3000);
+    return state == s;
+  }
+  else
+  {
+    return false;
   }
 }
 
 
-TEST(MultiThreading, ServerScheduler)
+static bool CheckErrorCode(Orthanc::JobsRegistry& registry,
+                           const std::string& id,
+                           Orthanc::ErrorCode code)
 {
-  ServerScheduler scheduler(10);
-
-  ServerJob job;
-  ServerCommandInstance& f2 = job.AddCommand(new Tutu(2));
-  ServerCommandInstance& f3 = job.AddCommand(new Tutu(3));
-  ServerCommandInstance& f4 = job.AddCommand(new Tutu(4));
-  ServerCommandInstance& f5 = job.AddCommand(new Tutu(5));
-  f2.AddInput(boost::lexical_cast<std::string>(42));
-  //f3.AddInput(boost::lexical_cast<std::string>(42));
-  //f4.AddInput(boost::lexical_cast<std::string>(42));
-  f2.ConnectOutput(f3);
-  f3.ConnectOutput(f4);
-  f4.ConnectOutput(f5);
-
-  f3.SetConnectedToSink(true);
-  f5.SetConnectedToSink(true);
-
-  job.SetDescription("tutu");
-
-  bool done = false;
-  boost::thread t(Tata, &scheduler, &job, &done);
-
-
-  //scheduler.Submit(job);
-
-  IServerCommand::ListOfStrings l;
-  scheduler.SubmitAndWait(l, job);
-
-  ASSERT_EQ(2u, l.size());
-  ASSERT_EQ(42 * 2 * 3, boost::lexical_cast<int>(l.front()));
-  ASSERT_EQ(42 * 2 * 3 * 4 * 5, boost::lexical_cast<int>(l.back()));
-
-  for (IServerCommand::ListOfStrings::iterator i = l.begin(); i != l.end(); i++)
+  Orthanc::JobInfo s;
+  if (registry.GetJobInfo(s, id))
   {
-    printf("** %s\n", i->c_str());
+    return code == s.GetStatus().GetErrorCode();
+  }
+  else
+  {
+    return false;
+  }
+}
+
+
+TEST(JobsRegistry, Priority)
+{
+  JobsRegistry registry;
+
+  std::string i1, i2, i3, i4;
+  registry.Submit(i1, new DummyJob(), 10);
+  registry.Submit(i2, new DummyJob(), 30);
+  registry.Submit(i3, new DummyJob(), 20);
+  registry.Submit(i4, new DummyJob(), 5);  
+
+  registry.SetMaxCompletedJobs(2);
+
+  std::set<std::string> id;
+  registry.ListJobs(id);
+
+  ASSERT_EQ(4u, id.size());
+  ASSERT_TRUE(id.find(i1) != id.end());
+  ASSERT_TRUE(id.find(i2) != id.end());
+  ASSERT_TRUE(id.find(i3) != id.end());
+  ASSERT_TRUE(id.find(i4) != id.end());
+
+  ASSERT_TRUE(CheckState(registry, i2, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(30, job.GetPriority());
+    ASSERT_EQ(i2, job.GetId());
+
+    ASSERT_TRUE(CheckState(registry, i2, Orthanc::JobState_Running));
   }
 
-  //SystemToolbox::ServerBarrier();
-  //SystemToolbox::USleep(3000000);
+  ASSERT_TRUE(CheckState(registry, i2, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckState(registry, i3, Orthanc::JobState_Pending));
 
-  scheduler.Stop();
-
-  done = true;
-  if (t.joinable())
   {
-    t.join();
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(20, job.GetPriority());
+    ASSERT_EQ(i3, job.GetId());
+
+    job.MarkSuccess();
+
+    ASSERT_TRUE(CheckState(registry, i3, Orthanc::JobState_Running));
   }
+
+  ASSERT_TRUE(CheckState(registry, i3, Orthanc::JobState_Success));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(10, job.GetPriority());
+    ASSERT_EQ(i1, job.GetId());
+  }
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(5, job.GetPriority());
+    ASSERT_EQ(i4, job.GetId());
+  }
+
+  {
+    JobsRegistry::RunningJob job(registry, 1);
+    ASSERT_FALSE(job.IsValid());
+  }
+
+  Orthanc::JobState s;
+  ASSERT_TRUE(registry.GetState(s, i1));
+  ASSERT_FALSE(registry.GetState(s, i2));  // Removed because oldest
+  ASSERT_FALSE(registry.GetState(s, i3));  // Removed because second oldest
+  ASSERT_TRUE(registry.GetState(s, i4));
+
+  registry.SetMaxCompletedJobs(1);  // (*)
+  ASSERT_FALSE(registry.GetState(s, i1));  // Just discarded by (*)
+  ASSERT_TRUE(registry.GetState(s, i4));
+}
+
+
+TEST(JobsRegistry, Simultaneous)
+{
+  JobsRegistry registry;
+
+  std::string i1, i2;
+  registry.Submit(i1, new DummyJob(), 20);
+  registry.Submit(i2, new DummyJob(), 10);
+
+  ASSERT_TRUE(CheckState(registry, i1, Orthanc::JobState_Pending));
+  ASSERT_TRUE(CheckState(registry, i2, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job1(registry, 0);
+    JobsRegistry::RunningJob job2(registry, 0);
+
+    ASSERT_TRUE(job1.IsValid());
+    ASSERT_TRUE(job2.IsValid());
+
+    job1.MarkFailure();
+    job2.MarkSuccess();
+
+    ASSERT_TRUE(CheckState(registry, i1, Orthanc::JobState_Running));
+    ASSERT_TRUE(CheckState(registry, i2, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, i1, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckState(registry, i2, Orthanc::JobState_Success));
+}
+
+
+TEST(JobsRegistry, Resubmit)
+{
+  JobsRegistry registry;
+
+  std::string id;
+  registry.Submit(id, new DummyJob(), 10);
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  registry.Resubmit(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    job.MarkFailure();
+
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+
+    registry.Resubmit(id);
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Failure));
+
+  registry.Resubmit(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(id, job.GetId());
+
+    job.MarkSuccess();
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+
+  registry.Resubmit(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+}
+
+
+TEST(JobsRegistry, Retry)
+{
+  JobsRegistry registry;
+
+  std::string id;
+  registry.Submit(id, new DummyJob(), 10);
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    job.MarkRetry(0);
+
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Retry));
+
+  registry.Resubmit(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Retry));
+  
+  registry.ScheduleRetries();
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    job.MarkSuccess();
+
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+}
+
+
+TEST(JobsRegistry, PausePending)
+{
+  JobsRegistry registry;
+
+  std::string id;
+  registry.Submit(id, new DummyJob(), 10);
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  registry.Pause(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+
+  registry.Pause(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+
+  registry.Resubmit(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+
+  registry.Resume(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+}
+
+
+TEST(JobsRegistry, PauseRunning)
+{
+  JobsRegistry registry;
+
+  std::string id;
+  registry.Submit(id, new DummyJob(), 10);
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+
+    registry.Resubmit(id);
+    job.MarkPause();
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+
+  registry.Resubmit(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+
+  registry.Resume(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+
+    job.MarkSuccess();
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+}
+
+
+TEST(JobsRegistry, PauseRetry)
+{
+  JobsRegistry registry;
+
+  std::string id;
+  registry.Submit(id, new DummyJob(), 10);
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+
+    job.MarkRetry(0);
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Retry));
+
+  registry.Pause(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+
+  registry.Resume(id);
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+
+    job.MarkSuccess();
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+}
+
+
+TEST(JobsRegistry, Cancel)
+{
+  JobsRegistry registry;
+
+  std::string id;
+  registry.Submit(id, new DummyJob(), 10);
+
+  ASSERT_FALSE(registry.Cancel("nope"));
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+            
+  ASSERT_TRUE(registry.Cancel(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+  
+  ASSERT_TRUE(registry.Cancel(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+  
+  ASSERT_TRUE(registry.Resubmit(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+  
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+
+    ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+
+    job.MarkSuccess();
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+
+  ASSERT_TRUE(registry.Cancel(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Success));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+
+  registry.Submit(id, new DummyJob(), 10);
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(id, job.GetId());
+
+    ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+
+    job.MarkCanceled();
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+
+  ASSERT_TRUE(registry.Resubmit(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+
+  ASSERT_TRUE(registry.Pause(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Paused));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+
+  ASSERT_TRUE(registry.Cancel(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+
+  ASSERT_TRUE(registry.Resubmit(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Pending));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+
+  {
+    JobsRegistry::RunningJob job(registry, 0);
+    ASSERT_TRUE(job.IsValid());
+    ASSERT_EQ(id, job.GetId());
+
+    ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+    ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Running));
+
+    job.MarkRetry(500);
+  }
+
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Retry));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_Success));
+
+  ASSERT_TRUE(registry.Cancel(id));
+  ASSERT_TRUE(CheckState(registry, id, Orthanc::JobState_Failure));
+  ASSERT_TRUE(CheckErrorCode(registry, id, ErrorCode_CanceledJob));
+}
+
+
+
+TEST(JobsEngine, SubmitAndWait)
+{
+  JobsEngine engine;
+  engine.SetWorkersCount(3);
+  engine.Start();
+
+  ASSERT_TRUE(engine.GetRegistry().SubmitAndWait(new DummyJob(), rand() % 10));
+  ASSERT_FALSE(engine.GetRegistry().SubmitAndWait(new DummyJob(true), rand() % 10));
+
+  engine.Stop();
+}
+
+
+
+
+
+#include "../OrthancServer/ServerJobs/LuaJobManager.h"
+#include "../Core/JobsEngine/Operations/StringOperationValue.h"
+#include "../Core/JobsEngine/Operations/LogJobOperation.h"
+
+
+TEST(JobsEngine, DISABLED_SequenceOfOperationsJob)
+{
+  JobsEngine engine;
+  engine.SetWorkersCount(3);
+  engine.Start();
+
+  std::string id;
+  SequenceOfOperationsJob* job = NULL;
+
+  {
+    std::auto_ptr<SequenceOfOperationsJob> a(new SequenceOfOperationsJob);
+    job = a.get();
+    engine.GetRegistry().Submit(id, a.release(), 0);
+  }
+
+  boost::this_thread::sleep(boost::posix_time::milliseconds(500));
+
+  {
+    SequenceOfOperationsJob::Lock lock(*job);
+    size_t i = lock.AddOperation(new LogJobOperation);
+    size_t j = lock.AddOperation(new LogJobOperation);
+    size_t k = lock.AddOperation(new LogJobOperation);
+    lock.AddInput(i, StringOperationValue("Hello"));
+    lock.AddInput(i, StringOperationValue("World"));
+    lock.Connect(i, j);
+    lock.Connect(j, k);
+  }
+
+  boost::this_thread::sleep(boost::posix_time::milliseconds(2000));
+
+  engine.Stop();
+
+}
+
+
+TEST(JobsEngine, DISABLED_Lua)
+{
+  JobsEngine engine;
+  engine.SetWorkersCount(2);
+  engine.Start();
+
+  LuaJobManager lua;
+  lua.SetMaxOperationsPerJob(5);
+  lua.SetTrailingOperationTimeout(200);
+
+  for (size_t i = 0; i < 30; i++)
+  {
+    boost::this_thread::sleep(boost::posix_time::milliseconds(150));
+
+    LuaJobManager::Lock lock(lua, engine);
+    size_t a = lock.AddLogOperation();
+    size_t b = lock.AddLogOperation();
+    size_t c = lock.AddSystemCallOperation("echo");
+    lock.AddStringInput(a, boost::lexical_cast<std::string>(i));
+    lock.AddNullInput(a);
+    lock.Connect(a, b);
+    lock.Connect(a, c);
+  }
+
+  boost::this_thread::sleep(boost::posix_time::milliseconds(2000));
+
+  engine.Stop();
+
 }

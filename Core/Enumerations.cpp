@@ -164,6 +164,9 @@ namespace Orthanc
       case ErrorCode_DatabaseUnavailable:
         return "The database is currently not available (probably a transient situation)";
 
+      case ErrorCode_CanceledJob:
+        return "This job was canceled";
+
       case ErrorCode_SQLiteNotOpened:
         return "SQLite: The database is not opened";
 
@@ -983,6 +986,34 @@ namespace Orthanc
     }
   }
 
+
+  const char* EnumerationToString(JobState state)
+  {
+    switch (state)
+    {
+      case JobState_Pending:
+        return "Pending";
+        
+      case JobState_Running:
+        return "Running";
+        
+      case JobState_Success:
+        return "Success";
+        
+      case JobState_Failure:
+        return "Failure";
+        
+      case JobState_Paused:
+        return "Paused";
+        
+      case JobState_Retry:
+        return "Retry";
+        
+      default:
+        throw OrthancException(ErrorCode_ParameterOutOfRange);
+    }
+  }
+  
 
   Encoding StringToEncoding(const char* encoding)
   {

@@ -42,7 +42,6 @@
 #include "../Core/Lua/LuaFunctionCall.h"
 #include "../Core/DicomFormat/DicomArray.h"
 #include "../Core/DicomNetworking/DicomServer.h"
-#include "../Core/DicomNetworking/ReusableDicomUserConnection.h"
 #include "OrthancInitialization.h"
 #include "ServerContext.h"
 #include "OrthancFindRequestHandler.h"
@@ -168,9 +167,9 @@ public:
 class OrthancApplicationEntityFilter : public IApplicationEntityFilter
 {
 private:
-  ServerContext& context_;
-  bool           alwaysAllowEcho_;
-  bool           alwaysAllowStore_;
+  ServerContext&  context_;
+  bool            alwaysAllowEcho_;
+  bool            alwaysAllowStore_;
 
 public:
   OrthancApplicationEntityFilter(ServerContext& context) :
@@ -264,13 +263,13 @@ public:
     }
 
     {
-      std::string lua = "Is" + configuration;
+      std::string name = "Is" + configuration;
 
-      LuaScripting::Locker locker(context_.GetLua());
+      LuaScripting::Lock lock(context_.GetLuaScripting());
       
-      if (locker.GetLua().IsExistingFunction(lua.c_str()))
+      if (lock.GetLua().IsExistingFunction(name.c_str()))
       {
-        LuaFunctionCall call(locker.GetLua(), lua.c_str());
+        LuaFunctionCall call(lock.GetLua(), name.c_str());
         call.PushString(remoteAet);
         call.PushString(remoteIp);
         call.PushString(calledAet);
@@ -291,11 +290,11 @@ public:
     {
       std::string lua = "Is" + std::string(configuration);
 
-      LuaScripting::Locker locker(context_.GetLua());
+      LuaScripting::Lock lock(context_.GetLuaScripting());
       
-      if (locker.GetLua().IsExistingFunction(lua.c_str()))
+      if (lock.GetLua().IsExistingFunction(lua.c_str()))
       {
-        LuaFunctionCall call(locker.GetLua(), lua.c_str());
+        LuaFunctionCall call(lock.GetLua(), lua.c_str());
         call.PushString(remoteAet);
         call.PushString(remoteIp);
         call.PushString(calledAet);
@@ -311,7 +310,7 @@ public:
 class MyIncomingHttpRequestFilter : public IIncomingHttpRequestFilter
 {
 private:
-  ServerContext& context_;
+  ServerContext&   context_;
   OrthancPlugins*  plugins_;
 
 public:
@@ -327,7 +326,7 @@ public:
                          const char* ip,
                          const char* username,
                          const IHttpHandler::Arguments& httpHeaders,
-                         const IHttpHandler::GetArguments& getArguments) const
+                         const IHttpHandler::GetArguments& getArguments)
   {
     if (plugins_ != NULL &&
         !plugins_->IsAllowed(method, uri, ip, username, httpHeaders, getArguments))
@@ -337,12 +336,12 @@ public:
 
     static const char* HTTP_FILTER = "IncomingHttpRequestFilter";
 
-    LuaScripting::Locker locker(context_.GetLua());
+    LuaScripting::Lock lock(context_.GetLuaScripting());
 
     // Test if the instance must be filtered out
-    if (locker.GetLua().IsExistingFunction(HTTP_FILTER))
+    if (lock.GetLua().IsExistingFunction(HTTP_FILTER))
     {
-      LuaFunctionCall call(locker.GetLua(), HTTP_FILTER);
+      LuaFunctionCall call(lock.GetLua(), HTTP_FILTER);
 
       switch (method)
       {
@@ -574,6 +573,7 @@ static void PrintErrors(const char* path)
     PrintErrorCode(ErrorCode_NotAcceptable, "Cannot send a response which is acceptable according to the Accept HTTP header");
     PrintErrorCode(ErrorCode_NullPointer, "Cannot handle a NULL pointer");
     PrintErrorCode(ErrorCode_DatabaseUnavailable, "The database is currently not available (probably a transient situation)");
+    PrintErrorCode(ErrorCode_CanceledJob, "This job was canceled");
     PrintErrorCode(ErrorCode_SQLiteNotOpened, "SQLite: The database is not opened");
     PrintErrorCode(ErrorCode_SQLiteAlreadyOpened, "SQLite: Connection is already open");
     PrintErrorCode(ErrorCode_SQLiteCannotOpen, "SQLite: Unable to open the database");
@@ -640,25 +640,6 @@ static void PrintErrors(const char* path)
 
 
 
-static void LoadLuaScripts(ServerContext& context)
-{
-  std::list<std::string> luaScripts;
-  Configuration::GetGlobalListOfStringsParameter(luaScripts, "LuaScripts");
-  for (std::list<std::string>::const_iterator
-         it = luaScripts.begin(); it != luaScripts.end(); ++it)
-  {
-    std::string path = Configuration::InterpretStringParameterAsPath(*it);
-    LOG(WARNING) << "Installing the Lua scripts from: " << path;
-    std::string script;
-    SystemToolbox::ReadFile(script, path);
-
-    LuaScripting::Locker locker(context.GetLua());
-    locker.GetLua().Execute(script);
-  }
-}
-
-
-
 #if ORTHANC_ENABLE_PLUGINS == 1
 static void LoadPlugins(OrthancPlugins& plugins)
 {
@@ -689,7 +670,8 @@ static bool WaitForExit(ServerContext& context,
   }
 #endif
 
-  context.GetLua().Execute("Initialize");
+  context.GetLuaScripting().Start();
+  context.GetLuaScripting().Execute("Initialize");
 
   bool restart;
 
@@ -723,7 +705,8 @@ static bool WaitForExit(ServerContext& context,
     }
   }
 
-  context.GetLua().Execute("Finalize");
+  context.GetLuaScripting().Execute("Finalize");
+  context.GetLuaScripting().Stop();
 
 #if ORTHANC_ENABLE_PLUGINS == 1
   if (context.HasPlugins())
@@ -1008,7 +991,11 @@ static bool ConfigureServerContext(IDatabaseWrapper& database,
     context.GetIndex().SetMaximumStorageSize(0);
   }
 
-  LoadLuaScripts(context);
+  LOG(INFO) << "Initializing Lua for the event handler";
+  context.GetLuaScripting().LoadGlobalConfiguration();
+
+  context.GetJobsEngine().GetRegistry().SetMaxCompletedJobs
+    (Configuration::GetGlobalUnsignedIntegerParameter("JobsHistorySize", 10));
 
 #if ORTHANC_ENABLE_PLUGINS == 1
   if (plugins)
