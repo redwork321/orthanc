@@ -36,6 +36,7 @@
 
 #include "../Logging.h"
 #include "../OrthancException.h"
+#include "../SerializationToolbox.h"
 
 #include <boost/lexical_cast.hpp>
 #include <stdexcept>
@@ -124,5 +125,27 @@ namespace Orthanc
     value.append(GetHost());
     value.append(GetPort());
     value.append(EnumerationToString(GetManufacturer()));
+  }
+
+
+  
+  void RemoteModalityParameters::Serialize(Json::Value& target) const
+  {
+    target = Json::objectValue;
+    target["AET"] = aet_;
+    target["Host"] = host_;
+    target["Port"] = port_;
+    target["Manufacturer"] = EnumerationToString(manufacturer_);
+  }
+
+  
+  RemoteModalityParameters::RemoteModalityParameters(const Json::Value& serialized)
+  {
+    aet_ = SerializationToolbox::ReadString(serialized, "AET");
+    host_ = SerializationToolbox::ReadString(serialized, "Host");
+    port_ = static_cast<uint16_t>
+      (SerializationToolbox::ReadUnsignedInteger(serialized, "Port"));
+    manufacturer_ = StringToModalityManufacturer
+      (SerializationToolbox::ReadString(serialized, "Manufacturer"));
   }
 }
