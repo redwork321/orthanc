@@ -1,6 +1,15 @@
 Pending changes in the mainline
 ===============================
 
+General
+-------
+
+* New advanced job engine
+* New configuration options:
+  - "ConcurrentJobs": Max number of jobs that are simultanously running
+  - "SynchronousCMove": Whether to run DICOM C-Move operations synchronously
+  - "JobsHistorySize": Max number of completed jobs that are kept in memory
+
 Orthanc Explorer
 ----------------
 
@@ -9,6 +18,7 @@ Orthanc Explorer
 REST API
 --------
 
+* "/jobs/..." to manage the jobs from the REST API
 * New option "?short" to list DICOM tags using their hexadecimal ID in:
   - "/instances/.../tags?short"
   - "/instances/.../header?short"
@@ -26,10 +36,18 @@ REST API
   "image/pam" MIME type to retrieve images in PAM format
   (https://en.wikipedia.org/wiki/Netpbm#PAM_graphics_format)
 
+Plugins
+-------
+
+* New primitive in database SDK: "lookupIdentifierRange" to speed up range searches
+
 Maintenance
 -----------
 
 * Fix generation of DICOMDIR if PatientID is empty
+* Fix issue 25 (Deadlock with Lua scripts): The event queue is now implemented for Lua
+* Configuration option "LogExportedResources" is now "false" by default
+* Header "OrthancCppDatabasePlugin.h" is now part of the "orthanc-databases" project
 * Upgraded dependencies for static and Windows builds:
   - boost 1.67.0
 
